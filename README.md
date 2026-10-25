@@ -74,7 +74,7 @@ The remastered textures are **not included**. They are Square Enix's assets, and
 
 ## Build from source
 
-1. Clone with submodules: `git clone --recursive https://github.com/uksteamaccwillysa0-lab/NieR-Remastered`
+1. Clone with submodules: `git clone --recursive https://github.com/LuJhOn67/NieR-Remastered`
 2. Get the DLSS SDK: `git clone https://github.com/NVIDIA/DLSS tools\dlss-sdk`
 3. Install Visual Studio 2022 Build Tools, meson, ninja and glslang.
 4. Run `dxvk-nier\build-msvc.bat`. The DLLs are written to `dxvk-nier\build.w64\src\d3d11\` and `...\dxgi\`.
