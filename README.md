@@ -63,9 +63,8 @@ The remastered textures are **not included**. They are Square Enix's assets, and
    ```
 5. Copy the contents of `out\data` into `<game>\data`. The game prefers loose files over its archives.
 
-**Memory limit:** the game reserves a fixed amount of memory per world area. With the full remaster it can stop with `Ran out of memory while loading ...dtt`. Two fixes:
-- Raise the game's limits with [Wolf's Limit Break](https://www.nexusmods.com/nierautomata/mods/70). Back up `NieRAutomata.exe` first.
-- Or build a lighter remaster that keeps every file at most 25% bigger: `python remaster\remaster.py --budget 1.25 --out out\data`.
+**Memory limit:** the game reserves a fixed amount of memory per world area. Without a budget the remaster stops the game in the city with `Ran out of memory while loading ...dtt`, even with [Wolf's Limit Break](https://www.nexusmods.com/nierautomata/mods/70). Build it with a budget that keeps every file at most 25% bigger:
+`python remaster\remaster.py --budget 1.25 --out out\data`
 
 ## Known issues
 
@@ -145,9 +144,7 @@ The remastered textures are **not included**. They are Square Enix's assets, and
 3. شغّل أوامر الاستخراج والتكبير المكتوبة في القسم الإنجليزي أعلاه، بالترتيب نفسه.
 4. انسخ محتويات `out\data` إلى `<game>\data`. اللعبة تفضّل الملفات المنفصلة على أرشيفاتها.
 
-**حد الذاكرة:** تحجز اللعبة ذاكرة ثابتة لكل منطقة من العالم. لذلك قد تتوقف مع الريماستر الكامل وتظهر رسالة `Ran out of memory while loading`. ولهذا حلّان:
-- ارفع حدود اللعبة بمود [Wolf's Limit Break](https://www.nexusmods.com/nierautomata/mods/70)، واحفظ نسخة من `NieRAutomata.exe` قبل ذلك.
-- أو ابنِ ريماستر أخف لا يكبر فيه أي ملف بأكثر من 25%، بإضافة `--budget 1.25` إلى أمر `remaster.py`.
+**حد الذاكرة:** تحجز اللعبة ذاكرة ثابتة لكل منطقة من العالم. لذلك يوقف الريماستر غير المحدود اللعبة في المدينة برسالة `Ran out of memory while loading`، حتى مع مود Wolf's Limit Break. الحل أن تبنيه بحد أقصى لا يكبر فيه أي ملف بأكثر من 25%، بإضافة `--budget 1.25` إلى أمر `remaster.py`.
 
 ### مشاكل معروفة
 
