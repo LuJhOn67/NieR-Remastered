@@ -1,0 +1,16 @@
+[submodule "dxvk-nier/include/native/directx"]
+	path = dxvk-nier/include/native/directx
+	url = https://github.com/Joshua-Ashton/mingw-directx-headers
+[submodule "dxvk-nier/include/vulkan"]
+	path = dxvk-nier/include/vulkan
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "dxvk-nier/include/spirv"]
+	path = dxvk-nier/include/spirv
+	url = https://github.com/KhronosGroup/SPIRV-Headers.git
+[submodule "dxvk-nier/subprojects/libdisplay-info"]
+	path = dxvk-nier/subprojects/libdisplay-info
+	url = https://github.com/doitsujin/libdisplay-info.git
+	branch = windows
+[submodule "dxvk-nier/subprojects/dxbc-spirv"]
+	path = dxvk-nier/subprojects/dxbc-spirv
+	url = https://github.com/doitsujin/dxbc-spirv.git

@@ -1,0 +1,141 @@
+#version 460
+
+// NieR RT mod: ray traced ambient occlusion at the game's half-resolution
+// SSAO stage. Overwrites the raw SSAO target before the game's own bilateral
+// blur and depth-aware upsample, which then act as the denoiser.
+
+#extension GL_EXT_ray_query : require
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_samplerless_texture_functions : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Global sampler heap (unused, part of the built-in layout)
+layout(set = 0, binding = 0)
+uniform sampler s_samplers[];
+
+// Game's half-resolution depth (same encoding as its SSAO input)
+layout(set = 1, binding = 0)
+uniform texture2D s_depth;
+
+// Game's half-resolution SSAO target, read and overwritten in place
+layout(set = 1, binding = 1, r8)
+uniform image2D s_ao;
+
+layout(push_constant, scalar)
+uniform push_data_t {
+  uint64_t  tlas;
+  vec4      inv_view[3];        // view -> world, rows
+  vec2      proj_scale;         // projection [0][0], [1][1]
+  vec2      depth_bias_scale;   // view depth = raw * y + x
+  uvec2     size;
+  float     sky_threshold;      // raw depth above this is sky
+  float     radius;             // ray length, world units
+  float     strength;
+  uint      frame;
+  uint      mode;               // 0 = replace, 1 = min with game SSAO; +16 = debug, no rays
+} pc;
+
+const uint MODE_NO_RAYS = 16u;
+
+const uint RAY_COUNT = 8u;
+
+
+vec3 view_position(ivec2 p) {
+  float raw = texelFetch(s_depth, clamp(p, ivec2(0), ivec2(pc.size) - 1), 0).x;
+  float z = raw * pc.depth_bias_scale.y + pc.depth_bias_scale.x;
+  vec2 uv = (vec2(p) + 0.5f) / vec2(pc.size);
+  return vec3(z * (uv.x * 2.0f - 1.0f) / pc.proj_scale.x,
+              z * (1.0f - uv.y * 2.0f) / pc.proj_scale.y,
+              -z);
+}
+
+
+vec3 to_world(vec3 v, float w) {
+  vec4 v4 = vec4(v, w);
+  return vec3(dot(pc.inv_view[0], v4), dot(pc.inv_view[1], v4), dot(pc.inv_view[2], v4));
+}
+
+
+uint hash(uint x) {
+  x ^= x >> 16u; x *= 0x7feb352du;
+  x ^= x >> 15u; x *= 0x846ca68bu;
+  x ^= x >> 16u;
+  return x;
+}
+
+
+void main() {
+  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+
+  if (any(greaterThanEqual(uvec2(p), pc.size)))
+    return;
+
+  float raw = texelFetch(s_depth, p, 0).x;
+  float game_ao = imageLoad(s_ao, p).x;
+
+  if (raw > pc.sky_threshold) {
+    imageStore(s_ao, p, vec4(1.0f));
+    return;
+  }
+
+  // Debug: run the whole pass but skip traversal, to isolate GPU hangs
+  if ((pc.mode & MODE_NO_RAYS) != 0u) {
+    imageStore(s_ao, p, vec4(game_ao));
+    return;
+  }
+
+  // Normal from the neighbour with the smaller depth step on each axis,
+  // so silhouettes don't produce slanted normals
+  vec3 c = view_position(p);
+  vec3 l = view_position(p - ivec2(1, 0)), r = view_position(p + ivec2(1, 0));
+  vec3 u = view_position(p - ivec2(0, 1)), d = view_position(p + ivec2(0, 1));
+  vec3 dx = abs(r.z - c.z) < abs(c.z - l.z) ? r - c : c - l;
+  vec3 dy = abs(d.z - c.z) < abs(c.z - u.z) ? d - c : c - u;
+  vec3 n = normalize(cross(dy, dx));
+
+  if (dot(n, -c) < 0.0f)
+    n = -n;
+
+  vec3 origin = to_world(c, 1.0f);
+  vec3 normal = normalize(to_world(n, 0.0f));
+  origin += normal * max(0.02f, -c.z * 0.002f);
+
+  // Tangent frame for cosine-weighted hemisphere sampling
+  vec3 t = normalize(abs(normal.y) < 0.99f ? cross(normal, vec3(0, 1, 0)) : cross(normal, vec3(1, 0, 0)));
+  vec3 b = cross(normal, t);
+
+  uint seed = hash(uint(p.x) * 1973u + uint(p.y) * 9277u + pc.frame * 26699u);
+  float rotation = float(seed & 0xffffu) / 65536.0f;
+
+  float occlusion = 0.0f;
+
+  for (uint i = 0u; i < RAY_COUNT; i++) {
+    float u1 = fract((float(i) + 0.5f) / float(RAY_COUNT) + rotation);
+    float u2 = fract(float(i) * 0.618034f + float(seed >> 16u) / 65536.0f);
+    float rr = sqrt(u1);
+    float phi = 6.2831853f * u2;
+    vec3 dir = normalize(t * (rr * cos(phi)) + b * (rr * sin(phi)) + normal * sqrt(max(0.0f, 1.0f - u1)));
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq, accelerationStructureEXT(pc.tlas),
+      gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+      0xffu, origin, 0.01f, dir, pc.radius);
+
+    while (rayQueryProceedEXT(rq)) { }
+
+    if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+      // Closer hits occlude more
+      float hit_t = rayQueryGetIntersectionTEXT(rq, true);
+      occlusion += 1.0f - hit_t / pc.radius;
+    }
+  }
+
+  float ao = clamp(1.0f - pc.strength * occlusion / float(RAY_COUNT), 0.0f, 1.0f);
+
+  if ((pc.mode & 15u) == 1u)
+    ao = min(ao, game_ao);
+
+  imageStore(s_ao, p, vec4(ao));
+}

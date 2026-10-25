@@ -1,0 +1,61 @@
+#version 460
+
+// NieR DLSS mod: camera motion vectors for DLSS/DLAA. NieR has no TAA, so
+// there are no motion vectors to reuse; this reprojects every pixel's depth
+// with the previous frame's camera. Moving characters are not covered yet.
+
+#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Global sampler heap (unused, part of the built-in layout)
+layout(set = 0, binding = 0)
+uniform sampler s_samplers[];
+
+// Game's linear depth from the depth pre-pass (R32F, encoded)
+layout(set = 1, binding = 0)
+uniform texture2D s_depth;
+
+// Motion vectors in pixels, pointing from the current to the previous position
+layout(set = 1, binding = 1, rg16f)
+uniform writeonly image2D s_mv;
+
+layout(push_constant, scalar)
+uniform push_data_t {
+  vec4  view_to_prev_clip[4];   // current view space -> previous frame clip space, rows
+  vec2  proj_scale;             // current projection [0][0], [1][1]
+  vec2  depth_bias_scale;       // view depth = raw * y + x
+  vec2  jitter;                 // current jitter in pixels
+  uvec2 size;
+} pc;
+
+
+void main() {
+  ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+
+  if (any(greaterThanEqual(uvec2(p), pc.size)))
+    return;
+
+  float raw = texelFetch(s_depth, p, 0).x;
+  float z = raw * pc.depth_bias_scale.y + pc.depth_bias_scale.x;
+
+  // Undo this frame's jitter so the vectors describe surface motion only
+  vec2 uv = (vec2(p) + 0.5f - pc.jitter) / vec2(pc.size);
+  vec4 view = vec4(z * (uv.x * 2.0f - 1.0f) / pc.proj_scale.x,
+                   z * (1.0f - uv.y * 2.0f) / pc.proj_scale.y,
+                   -z, 1.0f);
+
+  vec4 clip = vec4(dot(pc.view_to_prev_clip[0], view), dot(pc.view_to_prev_clip[1], view),
+                   dot(pc.view_to_prev_clip[2], view), dot(pc.view_to_prev_clip[3], view));
+
+  vec2 mv = vec2(0.0f);
+
+  if (clip.w > 1.0e-4f) {
+    vec2 ndc = clip.xy / clip.w;
+    vec2 prev_uv = vec2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+    mv = (prev_uv - uv) * vec2(pc.size);
+  }
+
+  imageStore(s_mv, p, vec4(mv, 0.0f, 0.0f));
+}

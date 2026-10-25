@@ -1,0 +1,8 @@
+dxvk-nier/build.w64/
+dxvk-nier/subprojects/.wraplock
+tools/
+work/
+out/
+catalog.json
+__pycache__/
+*.zip
