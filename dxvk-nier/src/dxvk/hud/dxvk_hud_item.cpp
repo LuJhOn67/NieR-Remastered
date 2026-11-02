@@ -128,7 +128,9 @@ namespace dxvk::hud {
     constexpr uint32_t Green    = 0xff60ff60u;
     constexpr uint32_t Red      = 0xff6060ffu;
 
-    HudPos pos = { 32, 48 };
+    // Top centre, clear of overlays that sit in the corners (RTSS, CapFrameX)
+    int32_t surfaceWidth = int32_t(renderer.getPushConstants().surfaceSize.width / options.scale);
+    HudPos pos = { std::max(32, surfaceWidth / 2 - 240), 48 };
 
     // Text with a drop shadow, readable on bright scenes
     auto line = [&] (uint32_t size, uint32_t color, const std::string& text) {
@@ -167,6 +169,10 @@ namespace dxvk::hud {
           case NierMenuRow::FrameGen:
             line(16, color, str::format(cursor, "Frame Gen     < ", settings.frameGen() ? "2x Smooth Motion" : "Off", " >",
               settings.frameGen() != settings.frameGenAtStartup() ? "  (restart the game)" : ""));
+            break;
+
+          case NierMenuRow::GrassDensity:
+            line(16, color, str::format(cursor, "Grass         < ", settings.grassDensity(), "x >"));
             break;
         }
       }

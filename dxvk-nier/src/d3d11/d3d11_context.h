@@ -797,6 +797,11 @@ namespace dxvk {
     D3D11CmdType                m_csDataType = D3D11CmdType::None;
 
     DxvkCsChunkFlags            m_csFlags;
+
+    // NieR mod: constant buffer with the extra grass instance transforms
+    std::unordered_map<uint64_t, Com<ID3D11Buffer>> m_nierGrassCache;
+    std::vector<float>          m_nierGrassRows;
+
     DxvkCsChunkRef              m_csChunk;
     DxvkCsDataBlock*            m_csData = nullptr;
 
@@ -867,6 +872,15 @@ namespace dxvk {
     void NierRtAfterDraw();
 
     void NierPreDraw();
+
+    void NierGrassDensity(
+      const VkDrawIndexedIndirectCommand&     draw);
+
+    Com<ID3D11Buffer> NierGrassBuild(
+      const float*                      src,
+            uint32_t                    instances,
+            uint32_t                    copies,
+            float                       spread);
 
     template<D3D11ShaderType ShaderStage>
     void BindShader(

@@ -39,6 +39,7 @@ d3d11_src = [
   'd3d11_fence.cpp',
   'd3d11_frame_trace.cpp',
   'd3d11_nier_rt.cpp',
+  'd3d11_nier_textures.cpp',
   'd3d11_gdi.cpp',
   'd3d11_initializer.cpp',
   'd3d11_input_layout.cpp',

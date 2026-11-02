@@ -119,6 +119,19 @@ namespace dxvk {
     }
 
     /**
+     * \brief Whether the NieR remaster replaced this texture's contents
+     *
+     * Replaced textures are bigger and have more mips than the game asked for.
+     */
+    bool IsNierReplaced() const {
+      return m_nierReplaced;
+    }
+
+    void SetNierReplaced() {
+      m_nierReplaced = true;
+    }
+
+    /**
      * \brief Retrieves D3D11 texture type
      * \returns D3D11 resource dimension
      */
@@ -577,6 +590,7 @@ namespace dxvk {
     D3D11Device*                  m_device;
     D3D11_RESOURCE_DIMENSION      m_dimension;
     D3D11_COMMON_TEXTURE_DESC     m_desc;
+    bool                          m_nierReplaced = false;
     D3D11_ON_12_RESOURCE_INFO     m_11on12;
     D3D11_COMMON_TEXTURE_MAP_MODE m_mapMode;
     DXGI_USAGE                    m_dxgiUsage;

@@ -17,6 +17,7 @@
 #include "d3d11_context_def.h"
 #include "d3d11_context_imm.h"
 #include "d3d11_device.h"
+#include "d3d11_nier_textures.h"
 #include "d3d11_fence.h"
 #include "d3d11_input_layout.h"
 #include "d3d11_interop.h"
@@ -214,6 +215,15 @@ namespace dxvk {
     const D3D11_TEXTURE2D_DESC1*  pDesc,
     const D3D11_SUBRESOURCE_DATA* pInitialData,
           ID3D11Texture2D1**      ppTexture2D) {
+    // NieR remaster: swap in an upscaled texture from nier_textures\ (keeps game files vanilla)
+    D3D11NierTextures::Replacement replacement;
+    bool replaced = ppTexture2D && D3D11NierTextures::get().find(*pDesc, pInitialData, replacement);
+
+    if (replaced) {
+      pDesc = &replacement.desc;
+      pInitialData = replacement.data.data();
+    }
+
     D3D11_COMMON_TEXTURE_DESC desc;
     desc.Width          = pDesc->Width;
     desc.Height         = pDesc->Height;
@@ -243,6 +253,10 @@ namespace dxvk {
     try {
       Com<D3D11Texture2D> texture = new D3D11Texture2D(this, &desc, nullptr, nullptr);
       m_initializer->InitTexture(texture->GetCommonTexture(), pInitialData);
+
+      if (replaced)
+        texture->GetCommonTexture()->SetNierReplaced();
+
       *ppTexture2D = texture.ref();
       return S_OK;
     } catch (const DxvkError& e) {
@@ -400,6 +414,28 @@ namespace dxvk {
       
       if (FAILED(D3D11ShaderResourceView::NormalizeDesc(pResource, &desc)))
         return E_INVALIDARG;
+
+      // NieR remaster: a replaced texture has more mips than the game knows
+      // about; a view of the original mip count would cut off the small mips
+      auto texture = resourceDesc.Dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D
+        ? GetCommonTexture(pResource) : nullptr;
+
+      if (texture && texture->IsNierReplaced()
+       && desc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D
+       && desc.Texture2D.MostDetailedMip == 0u)
+        desc.Texture2D.MipLevels = texture->Desc()->MipLevels;
+    }
+
+    // NieR remaster: a BC7 replacement (created BC7_TYPELESS) of a BC1-3 texture keeps the game's sRGB choice
+    if (resourceDesc.Dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D) {
+      auto texture = GetCommonTexture(pResource);
+
+      if (texture && texture->IsNierReplaced() && texture->Desc()->Format == DXGI_FORMAT_BC7_TYPELESS) {
+        bool srgb = !pDesc || desc.Format == DXGI_FORMAT_BC1_UNORM_SRGB
+          || desc.Format == DXGI_FORMAT_BC2_UNORM_SRGB || desc.Format == DXGI_FORMAT_BC3_UNORM_SRGB
+          || desc.Format == DXGI_FORMAT_BC7_UNORM_SRGB;
+        desc.Format = srgb ? DXGI_FORMAT_BC7_UNORM_SRGB : DXGI_FORMAT_BC7_UNORM;
+      }
     }
 
     uint32_t plane = D3D11ShaderResourceView::GetPlaneSlice(&desc);

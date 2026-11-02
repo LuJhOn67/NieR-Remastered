@@ -1,6 +1,7 @@
 #include "d3d11_context_imm.h"
 #include "d3d11_device.h"
 #include "d3d11_swapchain.h"
+#include "d3d11_nier_textures.h"
 
 #include "../dxvk/dxvk_latency_builtin.h"
 #include "../dxvk/dxvk_shader_spirv.h"
@@ -262,6 +263,7 @@ namespace dxvk {
     if (!(PresentFlags & DXGI_PRESENT_TEST)) {
       D3D11FrameTracer::get().onPresent();
       D3D11RtCapture::get().onPresent();
+      D3D11NierTextures::get().onPresent();
     }
 
     if (m_device->getDeviceStatus() != VK_SUCCESS)

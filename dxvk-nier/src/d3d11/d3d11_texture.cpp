@@ -3,6 +3,9 @@
 #include "d3d11_gdi.h"
 #include "d3d11_texture.h"
 
+#include "../dxvk/dxvk_nier_settings.h"
+#include "d3d11_nier_textures.h"
+
 #include "../util/util_shared_res.h"
 #include "../util/util_win32_compat.h"
 
@@ -112,6 +115,15 @@ namespace dxvk {
                        |  VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
       imageInfo.access |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
                        |  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+      // NieR mod: DLSS samples the scene depth. Adding that usage later
+      // recreates the image while layers such as ReShade still use the old
+      // one (GPU crash with depth effects like MXAO), so add it up front.
+      if (NierModSettings::get().dlssLoaded()) {
+        imageInfo.usage  |= VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.stages |= VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+        imageInfo.access |= VK_ACCESS_SHADER_READ_BIT;
+      }
     }
     
     if (m_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) {
@@ -263,7 +275,8 @@ namespace dxvk {
   
   
   D3D11CommonTexture::~D3D11CommonTexture() {
-    
+    if (m_nierReplaced)
+      D3D11NierTextures::get().note(D3D11NierTextures::Event::DestroyReplaced);
   }
   
   

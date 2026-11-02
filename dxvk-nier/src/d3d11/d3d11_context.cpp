@@ -1,10 +1,33 @@
 #include <algorithm>
+#include <cmath>
 
 #include "d3d11_context.h"
 #include "d3d11_context_def.h"
 #include "d3d11_context_imm.h"
 
+#include "../dxvk/dxvk_nier_settings.h"
+#include "../util/config/config.h"
+
+#include "d3d11_nier_textures.h"
+
 namespace dxvk {
+
+  // NieR remaster diagnostics: copies that involve a replaced (bigger) texture
+  static void NierNoteCopy(ID3D11Resource* pDst, ID3D11Resource* pSrc) {
+    D3D11_RESOURCE_DIMENSION dstDim, srcDim;
+    pDst->GetType(&dstDim);
+    pSrc->GetType(&srcDim);
+
+    auto dst = dstDim != D3D11_RESOURCE_DIMENSION_BUFFER ? GetCommonTexture(pDst) : nullptr;
+    auto src = srcDim != D3D11_RESOURCE_DIMENSION_BUFFER ? GetCommonTexture(pSrc) : nullptr;
+
+    if (dst && dst->IsNierReplaced())
+      D3D11NierTextures::get().note(D3D11NierTextures::Event::CopyToReplaced);
+
+    if (src && src->IsNierReplaced())
+      D3D11NierTextures::get().note(D3D11NierTextures::Event::CopyFromReplaced);
+  }
+
 
   template<typename ContextType>
   D3D11CommonContext<ContextType>::D3D11CommonContext(
@@ -287,6 +310,8 @@ namespace dxvk {
     if (!pDstResource || !pSrcResource)
       return;
 
+    NierNoteCopy(pDstResource, pSrcResource);
+
     if (pSrcBox
      && (pSrcBox->left  >= pSrcBox->right
       || pSrcBox->top   >= pSrcBox->bottom
@@ -358,6 +383,8 @@ namespace dxvk {
 
     if (!pDstResource || !pSrcResource || (pDstResource == pSrcResource))
       return;
+
+    NierNoteCopy(pDstResource, pSrcResource);
 
     if (unlikely(D3D11FrameTracer::get().recording()))
       D3D11FrameTracer::get().onCopy(this, "COPY", pDstResource, pSrcResource);
@@ -1157,6 +1184,7 @@ namespace dxvk {
     draw.firstInstance = StartInstanceLocation;
 
     BatchDrawIndexed(draw);
+    NierGrassDensity(draw);
   }
 
 
@@ -2750,6 +2778,7 @@ namespace dxvk {
   void STDMETHODCALLTYPE D3D11CommonContext<ContextType>::SetResourceMinLOD(
           ID3D11Resource*                   pResource,
           FLOAT                             MinLOD) {
+    D3D11NierTextures::get().note(D3D11NierTextures::Event::MinLod);
     bool s_errorShown = false;
 
     if (std::exchange(s_errorShown, true))
@@ -3665,6 +3694,185 @@ namespace dxvk {
       ] (DxvkContext* ctx) {
         ctx->nierDlaa(cColor, cDepth, cLinearDepth, cParams);
       });
+    }
+  }
+
+
+  template<typename ContextType>
+  void D3D11CommonContext<ContextType>::NierGrassDensity(
+    const VkDrawIndexedIndirectCommand&     draw) {
+    // Grass is drawn instanced with one object->world matrix per instance in
+    // VS cb11 (4 rows each, indexed by InstanceIndex - BaseInstance). Draw it
+    // again with extra instances: copies of every instance, turned and moved
+    // by a hash of its position, so the depth, shadow and colour passes all
+    // place the same extra grass.
+    if constexpr (!IsDeferred) {
+      constexpr uint32_t MaxGrassIndices = 1000u;
+      constexpr uint32_t MaxRows = D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT;
+
+      uint32_t density = NierModSettings::get().grassDensity();
+
+      if (likely(density <= 1u) || draw.indexCount > MaxGrassIndices)
+        return;
+
+      // Skip the sun shadow map (square cascade viewports in the shadow atlas):
+      // extra grass there doubled the GPU cost and is hardly visible
+      const auto& vp = m_state.rs.viewports[0];
+
+      if (m_state.rs.numViewports && vp.Width >= 1024.0f && vp.Width == vp.Height)
+        return;
+
+      uint32_t copies = density - 1u;
+      uint32_t instances = draw.instanceCount;
+
+      if (instances * (copies + 1u) * 4u > MaxRows)
+        return;
+
+      const auto& cb = m_state.cbv[D3D11ShaderType::eVertex].buffers[11];
+
+      if (!cb.buffer.ptr() || cb.constantCount < instances * 4u)
+        return;
+
+      auto slice = cb.buffer->GetBuffer()->getSliceInfo(
+        VkDeviceSize(cb.constantOffset) * 16u, VkDeviceSize(instances) * 64u);
+
+      if (!slice.mapPtr)
+        return;
+
+      auto src = static_cast<const float*>(slice.mapPtr);
+      static const float spread = std::clamp(Config::getUserConfig().getOption<float>("d3d11.nierGrassSpread", 1.0f), 0.1f, 5.0f);
+
+      // Grass instances don't move, and the depth pre-pass and colour pass draw the same set: build the extra
+      // instances once per distinct set and keep them in an immutable buffer, keyed by a hash of the game's rows
+      uint64_t key = 0xcbf29ce484222325ull ^ (uint64_t(copies) << 56);
+      auto words = reinterpret_cast<const uint64_t*>(src);
+
+      for (size_t w = 0; w < size_t(instances) * 8u; w++)
+        key = (key ^ words[w]) * 0x100000001b3ull;
+
+      ID3D11Buffer* newBuffer = nullptr;
+      auto cached = m_nierGrassCache.find(key);
+
+      if (cached != m_nierGrassCache.end()) {
+        newBuffer = cached->second.ptr();
+
+        if (!newBuffer)
+          return;                                // set rejected before
+      } else {
+        Com<ID3D11Buffer> built = NierGrassBuild(src, instances, copies, spread);
+        newBuffer = built.ptr();
+
+        if (m_nierGrassCache.size() >= 8192u)
+          m_nierGrassCache.clear();
+
+        m_nierGrassCache.emplace(key, std::move(built));
+
+        if (!newBuffer)
+          return;
+      }
+
+      // Swap cb11 for our buffer, draw the extra instances, restore the game's binding
+      Com<D3D11Buffer> oldBuffer = cb.buffer.ptr();
+      UINT oldOffset = cb.constantOffset;
+      UINT oldCount = cb.constantCount;
+
+      UINT newOffset = 0u;
+      UINT newCount = align(instances * copies * 4u, 16u);
+
+      SetConstantBuffers1<D3D11ShaderType::eVertex>(11u, 1u, &newBuffer, &newOffset, &newCount);
+
+      VkDrawIndexedIndirectCommand extra = draw;
+      extra.instanceCount = instances * copies;
+      extra.firstInstance = 0u;
+      BatchDrawIndexed(extra);
+
+      ID3D11Buffer* restore = oldBuffer.ptr();
+      SetConstantBuffers1<D3D11ShaderType::eVertex>(11u, 1u, &restore, &oldOffset, &oldCount);
+    }
+  }
+
+
+  template<typename ContextType>
+  Com<ID3D11Buffer> D3D11CommonContext<ContextType>::NierGrassBuild(
+    const float*                            src,
+          uint32_t                          instances,
+          uint32_t                          copies,
+          float                             spread) {
+    {
+      // Only plain affine transforms (last row 0 0 0 1)
+      for (uint32_t i = 0; i < instances; i++) {
+        const float* m = src + 16u * i;
+
+        for (uint32_t j = 0; j < 12u; j++) {
+          if (!std::isfinite(m[j]) || std::abs(m[j]) > 1.0e5f)
+            return nullptr;
+        }
+
+        if (m[12] != 0.0f || m[13] != 0.0f || m[14] != 0.0f || m[15] != 1.0f)
+          return nullptr;
+      }
+
+      m_nierGrassRows.resize(size_t(instances) * copies * 16u);
+      float* dst = m_nierGrassRows.data();
+
+      for (uint32_t c = 1u; c <= copies; c++) {
+        for (uint32_t i = 0; i < instances; i++, dst += 16u) {
+          const float* m = src + 16u * i;
+
+          // Deterministic per-position random numbers
+          uint32_t key[4];
+          std::memcpy(key, &m[3], 4u);
+          std::memcpy(key + 1, &m[7], 4u);
+          std::memcpy(key + 2, &m[11], 4u);
+          key[3] = c;
+
+          uint64_t h = 0xcbf29ce484222325ull;
+
+          for (uint32_t k = 0; k < sizeof(key); k++) {
+            h ^= reinterpret_cast<const uint8_t*>(key)[k];
+            h *= 0x100000001b3ull;
+          }
+
+          float r0 = float((h >>  0) & 0xffffu) / 65535.0f;
+          float r1 = float((h >> 16) & 0xffffu) / 65535.0f;
+          float r2 = float((h >> 32) & 0xffffu) / 65535.0f;
+
+          // Turn around the world up axis (Y) and move sideways by about one clump
+          float yaw = r0 * 6.2831853f;
+          float dir = r1 * 6.2831853f;
+          float scale = std::sqrt(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
+          float dist = scale * spread * (0.5f + 0.7f * r2);
+
+          float cy = std::cos(yaw), sy = std::sin(yaw);
+
+          for (uint32_t col = 0; col < 3u; col++) {
+            dst[0 + col] =  cy * m[0 + col] + sy * m[8 + col];
+            dst[4 + col] =  m[4 + col];
+            dst[8 + col] = -sy * m[0 + col] + cy * m[8 + col];
+          }
+
+          dst[3]  = m[3]  + dist * std::cos(dir);
+          dst[7]  = m[7];
+          dst[11] = m[11] + dist * std::sin(dir);
+          std::memcpy(dst + 12u, m + 12u, 16u);
+        }
+      }
+
+      // Immutable: it is drawn every frame and never changes
+      D3D11_BUFFER_DESC desc = { };
+      desc.ByteWidth = align(instances * copies * 4u, 16u) * 16u;
+      desc.Usage = D3D11_USAGE_IMMUTABLE;
+      desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+
+      m_nierGrassRows.resize(desc.ByteWidth / sizeof(float));
+
+      D3D11_SUBRESOURCE_DATA init = { m_nierGrassRows.data(), 0u, 0u };
+      Com<ID3D11Buffer> buffer;
+
+      if (FAILED(m_parent->CreateBuffer(&desc, &init, &buffer)))
+        return nullptr;
+
+      return buffer;
     }
   }
 
@@ -5900,6 +6108,13 @@ namespace dxvk {
     // We need a different code path for buffers
     D3D11_RESOURCE_DIMENSION resourceType;
     pDstResource->GetType(&resourceType);
+
+    if (resourceType != D3D11_RESOURCE_DIMENSION_BUFFER) {
+      auto texture = GetCommonTexture(pDstResource);
+      D3D11NierTextures::get().note(texture && texture->IsNierReplaced()
+        ? D3D11NierTextures::Event::UpdateReplaced
+        : D3D11NierTextures::Event::UpdateOther);
+    }
 
     if (likely(resourceType == D3D11_RESOURCE_DIMENSION_BUFFER)) {
       const auto bufferResource = static_cast<D3D11Buffer*>(pDstResource);

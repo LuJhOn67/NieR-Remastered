@@ -66,6 +66,22 @@ The remastered textures are **not included**. They are Square Enix's assets, and
 **Memory limit:** the game reserves a fixed amount of memory per world area. Without a budget the remaster stops the game in the city with `Ran out of memory while loading ...dtt`, even with [Wolf's Limit Break](https://www.nexusmods.com/nierautomata/mods/70). Build it with a budget that keeps every file at most 25% bigger:
 `python remaster\remaster.py --budget 1.25 --out out\data`
 
+## 4K texture packs (Special K style)
+
+Packs whose files are named after the CRC32C of the original texture (`XXXXXXXX.dds`, for example "4K AI Textures RePacked" on Nexus) work without touching the game files: the mod swaps each texture when the game creates it, so the textures never use the game's fixed memory and never cause `Ran out of memory`.
+
+1. `pip install crc32c`, then match the pack against your game (reads the CPKs directly, a few minutes):
+   ```
+   python remaster\map_4k_cpk.py "<pack>\textures" "<game>\data\data*.cpk" out\pack_map.json
+   ```
+2. Put the matched files into `<game>\nier_textures\` under their new names (hard links on the same drive, so no extra space):
+   ```
+   python remaster\link_4k_pack.py "<pack>\textures" out\pack_map.json "<game>"
+   ```
+3. Optional, in `dxvk.conf`: `d3d11.nierTexturesMaxSize = 2048` uploads at most 2048x2048 per texture (a quarter of the VRAM of 4K). `0` = no limit.
+
+BC7 replacements of BC1/BC3 originals are supported; the game's sRGB choice is kept.
+
 ## Known issues
 
 - DLSS only knows the camera motion, not the motion of characters, so fast-moving characters can leave a slight trail.
@@ -145,6 +161,14 @@ The remastered textures are **not included**. They are Square Enix's assets, and
 4. انسخ محتويات `out\data` إلى `<game>\data`. اللعبة تفضّل الملفات المنفصلة على أرشيفاتها.
 
 **حد الذاكرة:** تحجز اللعبة ذاكرة ثابتة لكل منطقة من العالم. لذلك يوقف الريماستر غير المحدود اللعبة في المدينة برسالة `Ran out of memory while loading`، حتى مع مود Wolf's Limit Break. الحل أن تبنيه بحد أقصى لا يكبر فيه أي ملف بأكثر من 25%، بإضافة `--budget 1.25` إلى أمر `remaster.py`.
+
+### حزم خامات 4K (بأسلوب Special K)
+
+الحزم اللي ملفاتها مسمّاة بـ CRC32C للخامة الأصلية (`XXXXXXXX.dds`، مثل "4K AI Textures RePacked" على Nexus) تشتغل بدون ما نلمس ملفات اللعبة: المود يبدّل كل خامة لحظة ما اللعبة تنشئها، فالخامات ما تستعمل ذاكرة اللعبة الثابتة وما تسبب `Ran out of memory`.
+
+1. نفّذ `pip install crc32c`، وبعدها اربط الحزمة بلعبتك (يقرأ ملفات CPK مباشرة، كم دقيقة): الأمر الأول بالقسم الإنجليزي.
+2. حط الملفات المربوطة بمجلد `<game>\nier_textures\` بأسمائها الجديدة (الأمر الثاني بالقسم الإنجليزي، `link_4k_pack.py`). إذا الحزمة واللعبة على نفس القرص، الروابط ما تاخذ مساحة إضافية.
+3. اختياري بـ `dxvk.conf`: السطر `d3d11.nierTexturesMaxSize = 2048` يخلي أقصى حجم للخامة 2048، فتصرف ربع ذاكرة كارت الـ 4K. القيمة `0` تعني بدون حد.
 
 ### مشاكل معروفة
 

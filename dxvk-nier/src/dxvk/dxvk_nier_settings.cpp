@@ -54,6 +54,8 @@ namespace dxvk {
         m_dlssPreset = uint32_t(value);
       else if (key == "frameGen")
         m_frameGen = std::min(uint32_t(value), 1u);
+      else if (key == "grassDensity")
+        m_grassDensity = std::clamp(uint32_t(value), 1u, 3u);
     }
   }
 
@@ -64,29 +66,39 @@ namespace dxvk {
          << "dlss=" << (m_dlssEnabled.load() ? 1 : 0) << "\n"
          << "dlssPreset=" << m_dlssPreset.load() << "\n"
          << "# 0 = off, 1 = NVIDIA Smooth Motion (RTX 50, applies after a restart)\n"
-         << "frameGen=" << m_frameGen.load() << "\n";
+         << "frameGen=" << m_frameGen.load() << "\n"
+         << "# 1 = vanilla, 2 or 3 = extra grass\n"
+         << "grassDensity=" << m_grassDensity.load() << "\n";
   }
 
 
-  uint32_t NierModSettings::rowCount() const {
+  static uint32_t visibleRows(const NierModSettings& settings, std::array<NierMenuRow, 4>& rows) {
     uint32_t count = 0u;
 
     // DLSS on/off and preset, only if DLSS is usable
-    if (m_dlssLoaded && dlssStatus() != NierDlssStatus::Unsupported)
-      count += 2u;
+    if (settings.dlssLoaded() && settings.dlssStatus() != NierDlssStatus::Unsupported) {
+      rows[count++] = NierMenuRow::DlssEnabled;
+      rows[count++] = NierMenuRow::DlssPreset;
+    }
 
-    if (frameGenSupported())
-      count += 1u;
+    if (settings.frameGenSupported())
+      rows[count++] = NierMenuRow::FrameGen;
 
+    rows[count++] = NierMenuRow::GrassDensity;
     return count;
   }
 
 
-  NierMenuRow NierModSettings::rowKind(uint32_t row) const {
-    if (!m_dlssLoaded || dlssStatus() == NierDlssStatus::Unsupported)
-      row += 2u;
+  uint32_t NierModSettings::rowCount() const {
+    std::array<NierMenuRow, 4> rows;
+    return visibleRows(*this, rows);
+  }
 
-    return NierMenuRow(std::min(row, uint32_t(NierMenuRow::FrameGen)));
+
+  NierMenuRow NierModSettings::rowKind(uint32_t row) const {
+    std::array<NierMenuRow, 4> rows;
+    uint32_t count = visibleRows(*this, rows);
+    return rows[std::min(row, count - 1u)];
   }
 
 
@@ -117,6 +129,10 @@ namespace dxvk {
 
       case NierMenuRow::FrameGen:
         m_frameGen = m_frameGen.load() ? 0u : 1u;
+        break;
+
+      case NierMenuRow::GrassDensity:
+        m_grassDensity = (m_grassDensity.load() + 3u + delta - 1u) % 3u + 1u;
         break;
 
       case NierMenuRow::DlssPreset: {

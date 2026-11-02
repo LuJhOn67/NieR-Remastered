@@ -25,6 +25,7 @@ namespace dxvk {
     DlssEnabled,
     DlssPreset,
     FrameGen,
+    GrassDensity,
   };
 
 
@@ -69,6 +70,9 @@ namespace dxvk {
 
     void setFrameGenSupported(bool supported) { m_frameGenSupported.store(supported); }
 
+    /// Grass density multiplier, 1 = vanilla, up to 3
+    uint32_t grassDensity() const { return m_grassDensity.load(); }
+
     /// Menu rows that are currently shown and can be selected
     uint32_t rowCount() const;
 
@@ -105,6 +109,7 @@ namespace dxvk {
     std::atomic<uint32_t> m_frameGen    = { 0u };
     uint32_t              m_frameGenStartup = 0u;
     std::atomic<bool>     m_frameGenSupported = { false };
+    std::atomic<uint32_t> m_grassDensity = { 1u };
 
     uint32_t              m_keysDown    = 0u;
 
